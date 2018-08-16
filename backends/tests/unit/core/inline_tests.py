@@ -48,3 +48,7 @@ class TestFunctions(unittest.TestCase):
   def test_inline_function_days_since(self):
     func = inline.functions['days_since']
     self.assertEqual(func('2018-03-29', '%Y-%m-%d'), 3)
+
+  def test_inline_function_join(self):
+    func = inline.functions['join']
+    self.assertEqual(func([1, '2', 3.3, [4, 4.1, '4.2']], ', '), "1, 2, 3.3, [4, 4.1, '4.2']")

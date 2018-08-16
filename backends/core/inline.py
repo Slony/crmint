@@ -34,9 +34,14 @@ def _days_since(date, format):
   return (datetime.today() - datetime.strptime(str(date), format)).days
 
 
+def _join(items, glue):
+  return glue.join([str(i) for i in items])
+
+
 functions = {
     'today': _today,
     'days_ago': _days_ago,
     'hours_ago': _hours_ago,
     'days_since': _days_since,
+    'join': _join,
 }
