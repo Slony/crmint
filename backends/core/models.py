@@ -324,7 +324,7 @@ class Job(BaseModel):
     try:
       for param in self.params:
         _ = param.val  # NOQA
-    except (InvalidExpression, TypeError) as e:
+    except (InvalidExpression, TypeError, ValueError) as e:
       from core import cloud_logging
       cloud_logging.logger.log_struct({
           'labels': {
