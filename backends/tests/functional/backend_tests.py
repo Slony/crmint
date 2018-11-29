@@ -27,7 +27,7 @@ class TestBaseBackendEndToEnd(utils.BaseTestCase):
     config_path = os.path.join(PROJECT_DIR, 'instance/config.py')
     with open(config_path, 'wb') as f:
       f.write('SQLALCHEMY_DATABASE_URI="mysql+mysqldb://'
-              'crmint:crmint@localhost:3306/crmintapp_test"')
+              'crmintapp:crmintapp@db:3306/crmintapp"')
 
 
 class TestIBackend(TestBaseBackendEndToEnd):

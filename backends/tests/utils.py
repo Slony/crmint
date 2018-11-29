@@ -26,7 +26,7 @@ from jbackend.app import create_app as jbackend_create_app
 class ModelTestCase(unittest.TestCase):
 
   SQLALCHEMY_DATABASE_URI = \
-      'mysql+mysqldb://crmint:crmint@localhost:3306/crmintapp_test'
+      'mysql+mysqldb://crmintapp:crmintapp@db:3306/crmintapp'
   SQLALCHEMY_TRACK_MODIFICATIONS = False
 
   def setUp(self):
@@ -46,7 +46,7 @@ class BaseTestCase(TestCase):
   ENV = 'dev'
   DEBUG = True
   SQLALCHEMY_DATABASE_URI = \
-      'mysql+mysqldb://crmint:crmint@localhost:3306/crmintapp_test'
+      'mysql+mysqldb://crmintapp:crmintapp@db:3306/crmintapp'
   SQLALCHEMY_TRACK_MODIFICATIONS = False
 
   def create_app(self):
