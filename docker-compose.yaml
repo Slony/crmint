@@ -32,6 +32,7 @@ services:
       context: .
       dockerfile: docker/backends/Dockerfile
     ports:
+      - "8000:8000"
       - "8080:8080"
       - "8081:8081"
     environment:
@@ -56,6 +57,8 @@ services:
       dockerfile: docker/backends/Dockerfile
     environment:
       DATABASE_URI: mysql+mysqldb://crmintapp:crmintapp@db:3306/crmintapp
+    volumes:
+      - ./backends/migrations:/app/backends/migrations
     command: >
       bash -c "export PYTHONPATH="/root/google-cloud-sdk/platform/google_appengine:lib" &&
                export FLASK_APP=run_ibackend.py &&
