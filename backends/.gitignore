@@ -5,6 +5,7 @@ data/*
 !data/app.json
 *.swp
 .idea
+instance/config.py
 
 # Unit test & coverage reports
 htmlcov/
