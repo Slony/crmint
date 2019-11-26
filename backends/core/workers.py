@@ -22,17 +22,21 @@ import hashlib
 import json
 import os
 from random import random
-import re
 import time
 import urllib
-from urllib2 import HTTPError
 import uuid
 import requests
+import yaml
 
 from google.cloud import bigquery
 from google.cloud.exceptions import ClientError
 from googleads import adwords
 import zeep.cache
+from apiclient.discovery import build
+from apiclient.errors import HttpError
+from apiclient.http import MediaIoBaseUpload
+import cloudstorage as gcs
+from oauth2client.service_account import ServiceAccountCredentials
 
 
 _KEY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data',
@@ -40,6 +44,7 @@ _KEY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data',
 AVAILABLE = (
     'BQMLTrainer',
     'BQQueryLauncher',
+    'BQToCMExporter',
     'BQToMeasurementProtocol',
     'BQToStorageExporter',
     'Commenter',
@@ -47,11 +52,10 @@ AVAILABLE = (
     'GADataImporter',
     'GAToBQImporter',
     'MLPredictor',
+    'MoblieAppConversionsImporter',
     'StorageChecker',
     'StorageCleaner',
     'StorageToBQImporter',
-    'BQToCM',
-    'ImportOfflineAppConversion',
 )
 
 # Defines how many times to retry on failure, default to 5 times.
@@ -137,7 +141,7 @@ class Worker(object):
       while tries < max_retries:
         try:
           return func(*args, **kwargs)
-        except HTTPError as e:
+        except HttpError as e:
           # If it is a client side error, then there's no reason to retry.
           if e.resp.status > 399 and e.resp.status < 500:
             raise e
@@ -325,7 +329,7 @@ class StorageChecker(StorageWorker):
       raise WorkerException('Files matching the patterns were not found')
     size = reduce(lambda total, stat: total + stat.st_size, stats, 0)
     if size < min_size:
-      raise WorkerException( 'Files matching the patterns are too small')
+      raise WorkerException('Files matching the patterns are too small')
 
 
 
@@ -639,8 +643,8 @@ class GADataImporter(GAWorker):
 class GAAudiencesUpdater(BQWorker, GAWorker):
   """Worker to update GA audiences using values from a BQ table.
 
-  See: https://developers.google.com/analytics/devguides/config/mgmt/v3/mgmtReference/management/remarketingAudience#resource
-  for more details on the required GA Audience JSON template format.
+  Visit https://bit.ly/2rnVpPz for more details on the required GA Audience JSON
+  template format.
   """
 
   PARAMS = [
@@ -868,7 +872,7 @@ class MeasurementProtocolWorker(Worker):
           param1=value10&param2=value20
           param1=value11&param2=value21
     """
-    assert isinstance(payloads, list) or isinstance(payloads, tuple)
+    assert isinstance(payloads, (list, tuple))
     payloads_utf8 = [sorted([(k, unicode(p[k]).encode('utf-8')) for k in p],
                             key=lambda t: t[0]) for p in payloads]
     return '\n'.join([urllib.urlencode(p) for p in payloads_utf8])
@@ -890,7 +894,7 @@ class MeasurementProtocolWorker(Worker):
         MeasurementProtocolException: if the HTTP request fails.
     """
     headers = {'user-agent': user_agent}
-    if self._debug:
+    if self._params['debug']:
       for payload in batch_payload.split('\n'):
         response = requests.post(
             'https://www.google-analytics.com/debug/collect',
@@ -990,7 +994,6 @@ class BQToMeasurementProtocolProcessor(BQWorker, MeasurementProtocolWorker):
   def _execute(self):
     self._bq_setup()
     self._table.reload()
-    self._debug = self._params['debug']
     page_token = self._params['bq_page_token'] or None
     batch_size = self._params['bq_batch_size']
     query_iterator = self.retry(self._table.fetch_data, max_retries=1)(
@@ -1019,19 +1022,9 @@ class BQMLTrainer(BQWorker):
 
 class AdsAPIWorker(Worker):
   """Abstract Customer Match worker."""
+
   _MAX_ITEMS_PER_CALL = 10000
 
-  # def _get_ads_api_client(self):
-	# 	global _ADS_API_CLIENT
-	# 	token_client = self._get_token_client()
-	# 	if not _ADS_API_CLIENT:
-	# 		_ADS_API_CLIENT = adwords.AdWordsClient(
-  #       developer_token=self._params['developer_token'].strip(),
-  #       oauth2_client=token_client,
-  #       user_agent="CRMint",
-  #       client_customer_id=self._params['client_customer_id'].strip(),
-  #       cache=zeep.cache.InMemoryCache()
-  #     )
   def _get_ads_api_client(self):
     yaml_string = AdsAPISettingsBuilder.build(self._params)
     ads_api_client = adwords.AdWordsClient.LoadFromString(yaml_string)
@@ -1041,18 +1034,24 @@ class AdsAPIWorker(Worker):
 
 class AdsAPISettingsBuilder(object):
   """Class that builds a YAML string from a dictionary"""
+
   @staticmethod
   def build(params):
-    string = "adwords:\n"
-    string += '  client_customer_id: ' + params['client_customer_id'].strip() + '\n'
-    string += '  developer_token: ' + params['developer_token'].strip() + '\n'
-    string += '  client_id: ' + params['client_id'].strip() + '\n'
-    string += '  client_secret: ' + params['client_secret'].strip() + '\n'
-    string += '  refresh_token: ' + params['google_ads_refresh_token'].strip()
-    return string
+    """Creates Google Ads setting in YAML format."""
+
+    settings = {
+        'adwords': {
+            'client_customer_id': params['client_customer_id'].strip(),
+            'developer_token': params['developer_token'].strip(),
+            'client_id': params['client_id'].strip(),
+            'client_secret': params['client_secret'].strip(),
+            'refresh_token': params['google_ads_refresh_token'].strip(),
+        }
+    }
+    return yaml.dump(settings)
 
 
-class BQToCM(AdsAPIWorker, BQWorker):
+class BQToCMExporter(AdsAPIWorker, BQWorker):
   """Customer Match worker."""
 
   PARAMS = [
@@ -1062,13 +1061,19 @@ class BQToCM(AdsAPIWorker, BQWorker):
       ('client_customer_id', 'string', True, '', 'Google Ads Customer ID'),
       ('list_name', 'string', True, '', 'Audience List Name'),
       ('encrypted_data', 'boolean', True, False, 'Are fields hashed already?'),
-      ('remove_data', 'boolean', True, False, 'Remove data from existing Audience List'),
+      ('remove_data', 'boolean', True, False,
+       'Remove data from existing Audience List'),
   ]
 
-  GLOBAL_SETTINGS = ['google_ads_refresh_token', 'client_id', 'client_secret', 'developer_token']
+  GLOBAL_SETTINGS = [
+      'google_ads_refresh_token',
+      'client_id',
+      'client_secret',
+      'developer_token'
+  ]
 
   # BigQuery batch size for querying results. Default to 10000.
-  BQ_BATCH_SIZE = int(10000)
+  BQ_BATCH_SIZE = 10000
 
   # Customer Match list fields
   EMAIL = 'Email'
@@ -1085,14 +1090,7 @@ class BQToCM(AdsAPIWorker, BQWorker):
   GENERIC_LIST = 'CM TEST - Generic List from the API'
 
   def _normalize_and_sha256(self, input_string):
-    """Normalizes (lowercase, remove whitespace) and hashes a string with SHA-256.
-
-    Args:
-      s: The string to perform this operation on.
-
-    Returns:
-      A normalized and SHA-256 hashed string.
-    """
+    """Returns SHA-256 hash of a normalised version of an input string."""
     return hashlib.sha256(input_string.strip().lower()).hexdigest()
 
   def _generate_list_data_structure(self):
@@ -1112,6 +1110,7 @@ class BQToCM(AdsAPIWorker, BQWorker):
       query_data: BQ table page data.
       fields: columns names
       worker_params: params from worker's UI
+
     Returns:
       customer_data: Processed data from BQ table page.
     """
@@ -1124,21 +1123,24 @@ class BQToCM(AdsAPIWorker, BQWorker):
 
       if not customer_data.get(worker_params["list_name"]):
         # init customer_data if needed
-        customer_data[worker_params["list_name"]] = self._generate_list_data_structure()
+        customer_data[worker_params["list_name"]] = \
+            self._generate_list_data_structure()
       list_data = customer_data[worker_params["list_name"]]
 
       if data.get(self.EMAIL):
         if self._params['encrypted_data']:
           list_data['emails'].append({'hashedEmail': data[self.EMAIL]})
         else:
-          list_data['emails'].append({'hashedEmail': self._normalize_and_sha256(data[self.EMAIL])})
+          list_data['emails'].append(
+              {'hashedEmail': self._normalize_and_sha256(data[self.EMAIL])})
 
       if data.get(self.PHONE):
         if self._params['encrypted_data']:
           list_data['phones'].append({'hashedPhoneNumber': data[self.PHONE]})
         else:
-          list_data['phones'].append(
-              {'hashedPhoneNumber': self._normalize_and_sha256(data[self.PHONE])})
+          list_data['phones'].append({
+              'hashedPhoneNumber': self._normalize_and_sha256(data[self.PHONE])
+          })
 
       if data.get(self.MOBILE_ID):
         list_data['mobile_ids'].append({'mobileId': data[self.MOBILE_ID]})
@@ -1151,8 +1153,10 @@ class BQToCM(AdsAPIWorker, BQWorker):
           address['hashedFirstName'] = data[self.FIRST_NAME]
           address['hashedLastName'] = data[self.LAST_NAME]
         else:
-          address['hashedFirstName'] = self._normalize_and_sha256(data[self.FIRST_NAME])
-          address['hashedLastName'] = self._normalize_and_sha256(data[self.LAST_NAME])
+          address['hashedFirstName'] = \
+              self._normalize_and_sha256(data[self.FIRST_NAME])
+          address['hashedLastName'] = \
+              self._normalize_and_sha256(data[self.LAST_NAME])
         address['CountryCode'] = data[self.COUNTRY_CODE]
         address['ZipCode'] = data[self.ZIP_CODE]
         list_data['addresses'].append(address)
@@ -1170,12 +1174,12 @@ class BQToCM(AdsAPIWorker, BQWorker):
       client: Adwords API client used to create and mutate the user list.
       list_name: The name of the user list to modify.
       customer_data: Processed customer data to be uploaded.
-    Returns:
-      None.
+      is_remove_data: Whether remove (True) or add (False) user list items.
     """
     ads_api_client = self._get_ads_api_client()
     # Initialize appropriate services.
-    user_list_service = ads_api_client.GetService('AdwordsUserListService', 'v201809')
+    user_list_service = ads_api_client.GetService('AdwordsUserListService',
+                                                  'v201809')
 
     # Check if the list already exists
     selector = {
@@ -1198,8 +1202,8 @@ class BQToCM(AdsAPIWorker, BQWorker):
           'xsi_type': 'CrmBasedUserList',
           'name': list_name,
           'description': 'This is a list of users uploaded from CRMint',
-          # CRM-based user lists can use a membershipLifeSpan of 10000 to indicate
-          # unlimited; otherwise normal values apply.
+          # CRM-based user lists can use a membershipLifeSpan of 10000
+          # to indicate unlimited; otherwise normal values apply.
           'membershipLifeSpan': 10000,
           'uploadKeyType': 'CONTACT_INFO'
       }
@@ -1209,16 +1213,9 @@ class BQToCM(AdsAPIWorker, BQWorker):
       user_list_id = result['value'][0]['id']
 
     members = []
-    if customer_data['emails']:
-      members.extend(customer_data['emails'])
-    if customer_data['phones']:
-      members.extend(customer_data['phones'])
-    if customer_data['mobile_ids']:
-      members.extend(customer_data['mobile_ids'])
-    if customer_data['user_ids']:
-      members.extend(customer_data['user_ids'])
-    if customer_data['addresses']:
-      members.extend(customer_data['addresses'])
+    for key in ['emails', 'emails', 'mobile_ids', 'user_ids', 'addresses']:
+      if customer_data[key]:
+        members.extend(customer_data[key])
 
     total_uploaded = 0
     # Flow control to keep calls within usage limits
@@ -1249,29 +1246,24 @@ class BQToCM(AdsAPIWorker, BQWorker):
         for user_list in response['userLists']:
           self.log_info(
               '%d members were %s to user list with name "%s" & ID "%d".',
-              len(members_to_upload), operation_string, user_list['name'], user_list['id'])
+              len(members_to_upload), operation_string, user_list['name'],
+              user_list['id'])
         total_uploaded += len(members_to_upload)
 
   def _check_global_params(self):
-    """If one or more global params are missing, we need to raise an exception and alert the user"""
-    if \
-    not self._params['client_id'] \
-    or self._params['client_id']=="" \
-    or not self._params['client_secret'] \
-    or self._params['client_secret']=="" \
-    or not self._params['google_ads_refresh_token'] \
-    or self._params['google_ads_refresh_token']=="" \
-    or not self._params['developer_token'] \
-    or self._params['developer_token']=="":
-      raise WorkerException("One or more global parameters are missing.")
+    """Raise an exception if a global param is missing."""
+    for key in self.GLOBAL_SETTINGS:
+      try:
+        assert self._params[key]
+      except (KeyError, AssertionError):
+        raise WorkerException('Global parameter "%s" is missing.' % key)
 
   def _process_query_results(self, query_data, query_schema):
     """Sends event hits from query data."""
     fields = [f.name for f in query_schema]
-    payload_list = []
     customer_data = self._read_query_data(query_data, fields, self._params)
     for name in customer_data:
-        self._upload_data(name, customer_data[name], self._params["remove_data"])
+      self._upload_data(name, customer_data[name], self._params["remove_data"])
 
   def _execute(self):
     self._check_global_params()
@@ -1285,6 +1277,120 @@ class BQToCM(AdsAPIWorker, BQWorker):
     query_first_page = next(query_iterator.pages)
     self._process_query_results(query_first_page, query_iterator.schema)
     # Updates the page token reference for the next iteration.
+    page_token = query_iterator.next_page_token
+    if page_token:
+      self._params['bq_page_token'] = page_token
+      self._enqueue(self.__class__.__name__, self._params, 0)
+
+
+class MoblieAppConversionsImporter(BQWorker):
+
+  PARAMS = [
+      ('link_id', 'string', True, '', 'Link ID'),
+      ('bq_project_id', 'string', False, '', 'BQ Project ID'),
+      ('bq_dataset_id', 'string', True, '', 'BQ Dataset ID'),
+      ('bq_table_id', 'string', True, '', 'BQ Table ID'),
+  ]
+  GLOBAL_SETTINGS = ['app_conversions_and_remarketing_developer_token']
+  CONTENT_TYPE = 'application/json; charset=utf-8'
+  HEADER_PARAMS = ['User_Agent', 'X_Forwarded_For']
+  BODY_PARAM = 'app_event_data'
+  REQUIRED_PARAMS = ['rdid', 'id_type', 'lat', 'app_version',
+                     'os_version', 'sdk_version', 'timestamp',
+                     'dev_token', 'link_id', 'app_event_type']
+  OPTIONAL_PARAMS = ['value', 'app_event_name', 'currency_code', 'gclid']
+
+  def _send_url(self, headers, params, data):
+    """Send API call given headers, parameters and extra data.
+
+    Take ad_event_id and attributed values and send appended params to make
+    the second API call.
+    """
+
+    response = requests.post('https://www.googleadservices.com'
+                             '/pagead/conversion/app/1.0',
+                             headers=headers, params=params, json=data)
+
+    if response.status_code != requests.codes.ok:
+      self.log_info(
+          'Failed to send event hit with status code (%s) and parameters: %s'
+          % (response.status_code, params)
+      )
+
+    result = json.loads(response.text)
+
+    try:
+      params['ad_event_id'] = result['ad_events'][0]['ad_event_id']
+    except (KeyError, IndexError):
+      return
+
+    params['attributed'] = result['attributed']
+
+    self._send_second_url(headers, params, data)
+
+  def _send_second_url(self, headers, params, data):
+    """Send second API call using fields from first API call."""
+
+    second_response = requests.post('https://www.googleadservices.com'
+                                    '/pagead/conversion/app/1.0/cross_network',
+                                    headers=headers, params=params, json=data)
+
+    if second_response.status_code != requests.codes.ok:
+      self.log_info(
+          'Failed to send event hit with status code (%s) and parameters: %s'
+          % (second_response.status_code, params)
+      )
+
+  def _process_query_results(self, query_data, query_schema):
+    """Process a chunk of data fetched from BigQuery.
+
+    For each row in the BigQuery table, check if we have the
+    required parameters and then check to see if we have any optional
+    parameters. If a required parameter is missing, warn the user of which
+    parameter. Create new dicts containing params and headers and for json
+    if we have app_event_data present. Send to _send_url() method to fetch data.
+    """
+
+    link_id = self._params['link_id']
+    dev_token = self._params['app_conversions_and_remarketing_developer_token']
+    fields = [field.name for field in query_schema]
+    for row in query_data:
+      data = dict(zip(fields, row))
+      data['dev_token'] = dev_token
+      data['link_id'] = link_id
+      try:
+        for req_param in self.REQUIRED_PARAMS + self.HEADER_PARAMS:
+          if data[req_param] is None:
+            self.log_info('Missing required fields')
+            raise ValueError((req_param, str(data)))
+      except KeyError as e:
+        self.log_error('Required field "%s" is missing' % e.message)
+        break
+      except ValueError as e:
+        self.log_warn('Required field "%s" is missing in the row %s', e.message)
+      params = {k: data[k] for k in self.REQUIRED_PARAMS + self.OPTIONAL_PARAMS
+                if k in data and data[k] is not None}
+      headers = {k.replace('_', '-'): data[k] for k in self.HEADER_PARAMS}
+      headers['Content-Type'] = self.CONTENT_TYPE
+
+      if self.BODY_PARAM in data and data[self.BODY_PARAM] is not None:
+        data = {self.BODY_PARAM: data[self.BODY_PARAM]}
+      else:
+        data = None
+        headers['Content-Length'] = '0'
+
+      self._send_url(headers, params, data)
+
+  def _execute(self):
+    """Executes worker by fetching table data."""
+
+    page_token = self._params.get('bq_page_token', None)
+    self._bq_setup()
+    self._table.reload()
+    query_iterator = self.retry(self._table.fetch_data, max_retries=1)(
+        page_token=page_token)
+    query_first_page = next(query_iterator.pages)
+    self._process_query_results(query_first_page, query_iterator.schema)
     page_token = query_iterator.next_page_token
     if page_token:
       self._params['bq_page_token'] = page_token
