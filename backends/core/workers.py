@@ -1300,7 +1300,7 @@ class MoblieAppConversionsImporter(BQWorker):
                      'dev_token', 'link_id', 'app_event_type']
   OPTIONAL_PARAMS = ['value', 'app_event_name', 'currency_code', 'gclid']
 
-  def _send_url(self, headers, params, data):
+  def _send_api_requests(self, headers, params, data):
     """Send API call given headers, parameters and extra data.
 
     Take ad_event_id and attributed values and send appended params to make
@@ -1310,36 +1310,28 @@ class MoblieAppConversionsImporter(BQWorker):
     response = requests.post('https://www.googleadservices.com'
                              '/pagead/conversion/app/1.0',
                              headers=headers, params=params, json=data)
-
     if response.status_code != requests.codes.ok:
-      self.log_info(
-          'Failed to send event hit with status code (%s) and parameters: %s'
+      self.log_warn(
+          'Failed to send conversion hit. Status code: %s, parameters: %s'
           % (response.status_code, params)
       )
-
+      return
     result = json.loads(response.text)
-
     try:
       params['ad_event_id'] = result['ad_events'][0]['ad_event_id']
     except (KeyError, IndexError):
       return
 
-    params['attributed'] = result['attributed']
-
-    self._send_second_url(headers, params, data)
-
-  def _send_second_url(self, headers, params, data):
-    """Send second API call using fields from first API call."""
-
-    second_response = requests.post('https://www.googleadservices.com'
-                                    '/pagead/conversion/app/1.0/cross_network',
-                                    headers=headers, params=params, json=data)
-
-    if second_response.status_code != requests.codes.ok:
-      self.log_info(
-          'Failed to send event hit with status code (%s) and parameters: %s'
-          % (second_response.status_code, params)
-      )
+    if result['attributed']:
+      params['attributed'] = True
+      response = requests.post('https://www.googleadservices.com'
+                               '/pagead/conversion/app/1.0/cross_network',
+                               headers=headers, params=params, json=data)
+      if response.status_code != requests.codes.ok:
+        self.log_warn(
+            'Failed to send confirmation hit. Status code: %s, parameters: %s'
+            % (response.status_code, params)
+        )
 
   def _process_query_results(self, query_data, query_schema):
     """Process a chunk of data fetched from BigQuery.
@@ -1361,13 +1353,14 @@ class MoblieAppConversionsImporter(BQWorker):
       try:
         for req_param in self.REQUIRED_PARAMS + self.HEADER_PARAMS:
           if data[req_param] is None:
-            self.log_info('Missing required fields')
             raise ValueError((req_param, str(data)))
       except KeyError as e:
         self.log_error('Required field "%s" is missing' % e.message)
         break
       except ValueError as e:
-        self.log_warn('Required field "%s" is missing in the row %s', e.message)
+        self.log_warn('Value for required field "%s" is missing in row %s',
+                      e.message)
+        continue
       params = {k: data[k] for k in self.REQUIRED_PARAMS + self.OPTIONAL_PARAMS
                 if k in data and data[k] is not None}
       headers = {k.replace('_', '-'): data[k] for k in self.HEADER_PARAMS}
@@ -1378,8 +1371,7 @@ class MoblieAppConversionsImporter(BQWorker):
       else:
         data = None
         headers['Content-Length'] = '0'
-
-      self._send_url(headers, params, data)
+      self._send_api_requests(headers, params, data)
 
   def _execute(self):
     """Executes worker by fetching table data."""
