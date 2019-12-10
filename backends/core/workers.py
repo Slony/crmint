@@ -1286,7 +1286,6 @@ class BQToCMExporter(AdsAPIWorker, BQWorker):
 class MoblieAppConversionsImporter(BQWorker):
 
   PARAMS = [
-      ('link_id', 'string', True, '', 'Link ID'),
       ('bq_project_id', 'string', False, '', 'BQ Project ID'),
       ('bq_dataset_id', 'string', True, '', 'BQ Dataset ID'),
       ('bq_table_id', 'string', True, '', 'BQ Table ID'),
@@ -1343,13 +1342,11 @@ class MoblieAppConversionsImporter(BQWorker):
     if we have app_event_data present. Send to _send_url() method to fetch data.
     """
 
-    link_id = self._params['link_id']
     dev_token = self._params['app_conversions_and_remarketing_developer_token']
     fields = [field.name for field in query_schema]
     for row in query_data:
       data = dict(zip(fields, row))
       data['dev_token'] = dev_token
-      data['link_id'] = link_id
       try:
         for req_param in self.REQUIRED_PARAMS + self.HEADER_PARAMS:
           if data[req_param] is None:
