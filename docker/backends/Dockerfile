@@ -14,14 +14,14 @@
 
 # Docker: Google App Engine
 
-FROM python:2.7.15-alpine3.6
+FROM python:3.7.6-alpine3.11
 MAINTAINER Pierre Dulac <dulacp@google.com>
 
 WORKDIR /root
 
 # Download Google App Engine SDK
 RUN apk add --no-cache --virtual .bootstrap-deps wget ca-certificates \
-    && wget -O cloud.tar.gz https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-217.0.0-linux-x86_64.tar.gz \
+    && wget -O cloud.tar.gz https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-274.0.0-linux-x86_64.tar.gz \
     && tar xzf cloud.tar.gz \
     && rm cloud.tar.gz \
     && apk del .bootstrap-deps
@@ -58,14 +58,14 @@ COPY ./backends/core/requirements_dev.txt /app/backends/core/requirements_dev.tx
 
 # Install python dependencies
 WORKDIR /app/backends
-RUN apk add --update mariadb-client-libs \
+RUN apk add --update mariadb-client \
     && apk add --no-cache --virtual .bootstrap-deps \
-        bash curl python-dev musl-dev mariadb-dev gcc build-base \
-    && pip install -r core/requirements_dev.txt -t lib_dev \
-    && pip install -r ibackend/requirements.txt -t lib \
-    && pip install -r jbackend/requirements.txt -t lib \
-    && pip install "sphinx==1.7.2" "sphinx-autobuild==0.7.1" \
-    && pip install Mysql-Python \
+        bash curl python3-dev musl-dev mariadb-dev gcc build-base \
+    && pip3 install -r core/requirements_dev.txt -t lib_dev \
+    && pip3 install -r ibackend/requirements.txt -t lib \
+    && pip3 install -r jbackend/requirements.txt -t lib \
+    && pip3 install "sphinx==1.7.2" "sphinx-autobuild==0.7.1" \
+    && pip3 install mysqlclient \
     && apk del .bootstrap-deps
 
 # Start
