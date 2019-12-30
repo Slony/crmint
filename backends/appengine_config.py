@@ -20,7 +20,7 @@ import os
 from google.appengine.ext import vendor
 
 
-# Add any libraries install in the "lib" folder.
+# Add any libraries install in the 'lib' folder.
 PROJECT_DIR = os.path.dirname(os.path.realpath(__file__))
 vendor.add(os.path.join(PROJECT_DIR, 'lib'))
 
@@ -29,7 +29,7 @@ if os.environ.get('SERVER_SOFTWARE', '').startswith('Development'):
   vendor.add(os.path.join(dir_rel_path, 'lib_dev'))
 
   import pkg_resources
-  pkg_resources.require("requests==2.18.4")
+  pkg_resources.require('requests==2.18.4')
 
   from requests_toolbelt.adapters import (
       appengine as requests_toolbelt_appengine)
@@ -37,4 +37,4 @@ if os.environ.get('SERVER_SOFTWARE', '').startswith('Development'):
   # Use the App Engine Requests adapter. This makes sure that Requests uses
   # URLFetch.
   requests_toolbelt_appengine.monkeypatch()
-  print "Appengine requests patched"
+  print('Appengine requests patched')

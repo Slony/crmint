@@ -340,11 +340,6 @@ class PipelineLogs(Resource):
     page = next(iterator.pages)
 
     for entry in page:
-      # print '    Page number: %d' % (iterator.page_number,)
-      # print '  Items in page: %d' % (page.num_items,)
-      # print 'Items remaining: %d' % (page.remaining,)
-      # print 'Next page token: %s' % (iterator.next_page_token,)
-      # print '----------------------------'
       if isinstance(entry.payload, dict) \
          and entry.payload.get('labels') \
          and entry.payload.get('labels').get('job_id'):
