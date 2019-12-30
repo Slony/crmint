@@ -1,6 +1,6 @@
 service: api-service
 
-runtime: python27
+runtime: python37
 api_version: 1
 threadsafe: true
 
