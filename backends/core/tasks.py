@@ -12,33 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-service: job-service
+from google.cloud import tasks_v2
+from google.protobuf import timestamp_pb2
 
-instance_class: B2
-basic_scaling:
-  max_instances: 20
-  idle_timeout: 10m
 
-runtime: python37
-api_version: 1
-threadsafe: true
+def delete(task_names):
+  pass
 
-handlers:
-- url: /.*
-  script: run_jbackend.app
-  login: admin
-  secure: always
-
-libraries:
-  - name: MySQLdb
-    version: "latest"
-  - name: ssl
-    version: "latest"
-  - name: grpcio
-    version: 1.0.0
-
-skip_files:
-  - \.pyc$
-  - ^ibackend$
-  - run_ibackend.py
-  - _ibackend.yaml$
+def add(name, params, delay):
+  pass

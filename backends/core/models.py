@@ -16,7 +16,8 @@ from datetime import datetime
 import json
 import re
 import uuid
-from google.appengine.api import taskqueue
+#  from google.appengine.api import taskqueue
+import tasks
 from simpleeval import simple_eval
 from simpleeval import InvalidExpression
 from sqlalchemy import Column
@@ -356,8 +357,10 @@ class Job(BaseModel):
     task_namespace = self._get_task_namespace()
     enqueued_tasks = TaskEnqueued.where(task_namespace=task_namespace)
     if enqueued_tasks:
-      tasks = [taskqueue.Task(name=t.task_name) for t in enqueued_tasks]
-      taskqueue.Queue().delete_tasks(tasks)
+      #  tasks = [taskqueue.Task(name=t.task_name) for t in enqueued_tasks]
+      #  taskqueue.Queue().delete_tasks(tasks)
+      task_names = [t.task_name for t in enqueued_tasks]
+      tasks.delete(task_names)
       TaskEnqueued.where(task_namespace=task_namespace).delete()
 
   def _enqueued_task_count(self):
@@ -430,18 +433,25 @@ class Job(BaseModel):
     task_name = '%s_%s' % (self.pipeline.id, self.id)
     escaped_task_name = re.sub(r'[^-_0-9a-zA-Z]', '-', task_name)
     unique_task_name = '%s_%s' % (escaped_task_name, str(uuid.uuid4()))
+    #  task_params = {
+        #  'job_id': self.id,
+        #  'worker_class': worker_class,
+        #  'worker_params': json.dumps(worker_params),
+        #  'task_name': unique_task_name
+    #  }
+    #  task = taskqueue.add(
+        #  target='job-service',
+        #  name=unique_task_name,
+        #  url='/task',
+        #  params=task_params,
+        #  countdown=delay)
     task_params = {
         'job_id': self.id,
         'worker_class': worker_class,
-        'worker_params': json.dumps(worker_params),
+        'worker_params': worker_params,
         'task_name': unique_task_name
     }
-    task = taskqueue.add(
-        target='job-service',
-        name=unique_task_name,
-        url='/task',
-        params=task_params,
-        countdown=delay)
+    task = tasks.add(unique_task_name, task_params, delay)
 
     # Keep track of the running task name.
     self._add_task_with_name(unique_task_name)
